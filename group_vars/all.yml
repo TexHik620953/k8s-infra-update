@@ -1,0 +1,29 @@
+---
+# --- Подключение к нодам -----------------------------------------------------
+ansible_user: ubuntu
+ansible_become: true
+ansible_ssh_private_key_file: ~/.ssh/id_rsa
+
+# --- Откуда выполнять kubectl (drain/uncordon) -------------------------------
+# localhost — ноутбук, на котором запускается ansible-playbook и есть kubeconfig.
+# Если kubectl есть только на CP: kubectl_host: cp1, kubectl_become: true
+kubectl_host: localhost
+kubectl_become: false
+
+# --- Имя ноды в кластере -----------------------------------------------------
+# По умолчанию совпадает с именем хоста в инвентаре.
+# Переопредели на конкретном хосте, если имена разные.
+k8s_node_name: "{{ inventory_hostname }}"
+
+# --- Hold-пакеты --------------------------------------------------------------
+# Обязаны быть на hold на каждой ноде.
+# Дополнительные held-пакеты не мешают.
+k8s_hold_packages:
+  - kubeadm
+  - kubectl
+  - kubelet
+  - kubernetes-cni
+
+# --- Отчёты -------------------------------------------------------------------
+# Пишутся на машине, где запущен ansible-playbook.
+report_dir: "{{ playbook_dir }}/reports/{{ now(fmt='%Y-%m-%d') }}"

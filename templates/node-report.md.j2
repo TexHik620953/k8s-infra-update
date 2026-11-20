@@ -1,0 +1,134 @@
+# {{ inventory_hostname }} — отчёт об обновлении
+
+- **Нода:** `{{ k8s_node_name }}`
+- **IP:** `{{ ansible_host | default(inventory_hostname) }}`
+- **Дата:** {{ now(fmt='%Y-%m-%d %H:%M') }}
+- **Статус:** {{ node_status | default('OK') }}
+
+## apt-mark showhold
+
+### До
+
+```
+{{ (holds.stdout_lines | default([])) | join('\n') or '— пусто —' }}
+```
+
+### После
+
+```
+{{ (holds_after.stdout_lines | default([])) | join('\n') or '—' }}
+```
+
+Обязательные: {% for p in k8s_hold_packages %}`{{ p }}`{% if not loop.last %}, {% endif %}{% endfor %}.
+
+## Ядро
+
+### До обновления
+
+`uname -r`:
+
+```
+{{ kernel_before.stdout | default('—') | trim or '—' }}
+```
+
+`ls -la /lib/modules/`:
+
+```
+{{ (modules_before.stdout_lines | default([])) | join('\n') or '—' }}
+```
+
+{% if kernels_before.stdout_lines | default([]) %}
+Установленные ядра: `{{ kernels_before.stdout_lines | join('`, `') }}`
+{% else %}
+Установленные ядра: —
+{% endif %}
+
+### После обновления
+
+`uname -r`:
+
+```
+{{ kernel_now.stdout | default('—') | trim or '—' }}
+```
+
+`ls -la /lib/modules/` после reboot:
+
+```
+{{ (kernel_info.stdout_lines | default([])) | join('\n') or '—' }}
+```
+
+`ls -la /lib/modules/` после `autoremove --purge`:
+
+```
+{{ (kernel_after.stdout_lines | default([])) | join('\n') or '—' }}
+```
+
+{% if kernels_after.stdout_lines | default([]) %}
+Установленные ядра: `{{ kernels_after.stdout_lines | join('`, `') }}`
+{% else %}
+Установленные ядра: —
+{% endif %}
+
+## Пакеты ядер
+
+### До
+
+```
+{{ (kernel_pkgs_before.stdout_lines | default([])) | join('\n') or '—' }}
+```
+
+### После
+
+```
+{{ (kernel_pkgs_after.stdout_lines | default([])) | join('\n') or '—' }}
+```
+
+## Система
+
+### До
+
+```
+{{ (system_before.stdout_lines | default([])) | join('\n') or '—' }}
+```
+
+### После
+
+```
+{{ (system_after.stdout_lines | default([])) | join('\n') or '—' }}
+```
+
+## Диск
+
+### До
+
+```
+{{ (df_before.stdout_lines | default([])) | join('\n') or '—' }}
+```
+
+### После
+
+```
+{{ (df_after.stdout_lines | default([])) | join('\n') or '—' }}
+```
+
+## Ошибки kubelet (после reboot)
+
+<details>
+<summary>journalctl -u kubelet -p err -n 30</summary>
+
+```
+{{ (kubelet_errors_after.stdout_lines | default([])) | join('\n') or '— ошибок нет —' }}
+```
+
+</details>
+
+## Обновлённые пакеты
+
+<details>
+<summary>Показать Inst/Remv из apt dist-upgrade</summary>
+
+```
+{{ (upgrade_sim.stdout_lines | default([])) | select('match', '^(Inst|Remv)') | list | join('\n') or '— нет данных —' }}
+```
+
+</details>

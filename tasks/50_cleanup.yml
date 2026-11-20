@@ -1,0 +1,79 @@
+---
+# Очистка старых пакетов с защитой от удаления работающего ядра.
+
+- name: Текущее ядро
+  ansible.builtin.command: uname -r
+  register: kernel_cleanup
+  changed_when: false
+
+- name: Симуляция autoremove
+  ansible.builtin.command: apt-get -s autoremove --purge
+  register: autoremove_sim
+  changed_when: false
+
+- name: autoremove не должен трогать held-пакеты
+  ansible.builtin.assert:
+    that:
+      - ("Purg " ~ item) not in autoremove_sim.stdout
+      - ("Remv " ~ item) not in autoremove_sim.stdout
+    fail_msg: "autoremove собирается удалить held-пакет {{ item }}"
+    quiet: true
+  loop: "{{ k8s_hold_packages }}"
+
+- name: Не дать удалить пакеты работающего ядра
+  ansible.builtin.assert:
+    that:
+      - ("linux-image-" ~ (kernel_cleanup.stdout | trim)) not in autoremove_sim.stdout
+      - ("linux-modules-" ~ (kernel_cleanup.stdout | trim)) not in autoremove_sim.stdout
+      - ("linux-headers-" ~ (kernel_cleanup.stdout | trim)) not in autoremove_sim.stdout
+    fail_msg: >-
+      autoremove собирается удалить пакеты текущего ядра
+      ({{ kernel_cleanup.stdout | trim }}) — остановка.
+      Разберись вручную: apt-get -s autoremove --purge
+    quiet: true
+
+- import_tasks: _confirm.yml
+  vars:
+    prev_lines: "{{ autoremove_sim.stdout_lines }}"
+    step_name: "apt-get autoremove --purge"
+
+- name: autoremove --purge
+  ansible.builtin.command: apt-get -y autoremove --purge
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: autoremove
+
+- name: Held-пакеты после очистки
+  ansible.builtin.command: apt-mark showhold
+  register: holds_after
+  changed_when: false
+
+- name: Held-пакеты сохранились
+  ansible.builtin.assert:
+    that:
+      - item in holds_after.stdout_lines
+    fail_msg: "{{ inventory_hostname }}: пакет {{ item }} больше не на hold"
+    quiet: true
+  loop: "{{ k8s_hold_packages }}"
+
+- name: Модули после очистки
+  ansible.builtin.shell: |
+    set -e
+    ls -la /lib/modules/
+    test -d "/lib/modules/{{ kernel_cleanup.stdout | trim }}"
+  register: kernel_after
+  changed_when: false
+
+- name: Список каталогов ядер (после)
+  ansible.builtin.command: ls -1 /lib/modules/
+  register: kernels_after
+  changed_when: false
+
+- name: Пакеты ядер (после)
+  ansible.builtin.shell: dpkg -l | awk '/^ii  linux-image/ {print $2, $3}'
+  register: kernel_pkgs_after
+  changed_when: false
+
+- name: Показать /lib/modules после очистки
+  ansible.builtin.debug:
+    msg: "{{ kernel_after.stdout_lines | default([]) }}"

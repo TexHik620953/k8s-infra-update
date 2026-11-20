@@ -1,0 +1,116 @@
+---
+# Проверки после reboot: ядро, модули, Ready, для CP — etcd и API.
+
+- name: Модули ядра после reboot
+  ansible.builtin.shell: |
+    set -e
+    ls -la /lib/modules/
+  register: kernel_info
+  changed_when: false
+
+- name: Показать /lib/modules после reboot
+  ansible.builtin.debug:
+    msg: "{{ kernel_info.stdout_lines | default([]) }}"
+
+- name: Текущее ядро
+  ansible.builtin.command: uname -r
+  register: kernel_now
+  changed_when: false
+
+- name: Модули текущего ядра на месте
+  ansible.builtin.stat:
+    path: "/lib/modules/{{ kernel_now.stdout | trim }}"
+  register: kmod
+  failed_when: not kmod.stat.exists
+
+- name: Системная информация (после)
+  ansible.builtin.shell: |
+    echo "### uname -a"
+    uname -a
+    echo
+    echo "### /etc/os-release"
+    grep -E '^(PRETTY_NAME|VERSION_ID)=' /etc/os-release
+    echo
+    echo "### uptime"
+    uptime
+    echo
+    echo "### free -h"
+    free -h
+    echo
+    echo "### df -i"
+    df -i
+    echo
+    echo "### systemctl --failed"
+    systemctl --failed --no-legend || true
+    echo
+    echo "### timedatectl"
+    timedatectl || true
+    echo
+    echo "### kubelet / containerd"
+    kubelet --version
+    containerd --version || true
+  register: system_after
+  changed_when: false
+
+- name: Ошибки kubelet (после reboot)
+  ansible.builtin.command: journalctl -u kubelet -p err -n 30 --no-pager
+  register: kubelet_errors_after
+  changed_when: false
+  failed_when: false
+
+- name: Ждём Node Ready
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - node
+      - "{{ k8s_node_name }}"
+      - -o
+      - 'jsonpath={.status.conditions[?(@.type=="Ready")].status}'
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: node_ready
+  until: node_ready.stdout | trim == "True"
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: etcd healthy (только CP)
+  ansible.builtin.command:
+    cmd: >-
+      kubectl -n kube-system exec etcd-{{ k8s_node_name }} --
+      etcdctl --endpoints=https://127.0.0.1:2379
+      --cacert=/etc/kubernetes/pki/etcd/ca.crt
+      --cert=/etc/kubernetes/pki/etcd/server.crt
+      --key=/etc/kubernetes/pki/etcd/server.key
+      endpoint health
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: etcd_health
+  until: etcd_health.rc == 0
+  retries: 60
+  delay: 10
+  changed_when: false
+  when: inventory_hostname in groups['k8s_control_plane']
+
+- name: API /readyz (только CP)
+  ansible.builtin.command: kubectl get --raw=/readyz
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: readyz
+  until: readyz.stdout | trim == "ok"
+  retries: 60
+  delay: 10
+  changed_when: false
+  when: inventory_hostname in groups['k8s_control_plane']
+
+- name: Статус нод
+  ansible.builtin.command: kubectl get nodes -o wide
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: nodes_now
+  changed_when: false
+
+- name: Показать статус нод
+  ansible.builtin.debug:
+    msg: "{{ nodes_now.stdout_lines | default([]) }}"

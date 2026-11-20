@@ -1,0 +1,147 @@
+---
+# Проверки перед началом работ на конкретной ноде.
+# Ничего не меняет, только собирает и показывает состояние.
+
+- name: Есть ли уже снимок кластера «до»
+  ansible.builtin.stat:
+    path: "{{ report_dir }}/cluster-before.md"
+  delegate_to: localhost
+  become: false
+  register: cluster_before_file
+
+- name: Снимок кластера «до»
+  import_tasks: 80_cluster_snapshot.yml
+  vars:
+    cluster_snapshot_dest: "{{ report_dir }}/cluster-before.md"
+    cluster_snapshot_title: "Кластер до обновления"
+  when: not (cluster_before_file.stat.exists and cluster_before_file.stat.size | int > 0)
+
+- name: Дождаться, пока apt/dpkg освободят lock
+  ansible.builtin.shell: |
+    for i in $(seq 1 120); do
+      if ! pgrep -x apt-get >/dev/null && ! pgrep -x apt >/dev/null \
+         && ! pgrep -x dpkg >/dev/null && ! pgrep -x unattended-upgr >/dev/null; then
+        exit 0
+      fi
+      sleep 5
+    done
+    echo "apt/dpkg всё ещё занят"
+    exit 1
+  changed_when: false
+
+- name: Остановить фоновые обновления на время работ
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+    - unattended-upgrades.service
+  failed_when: false
+  changed_when: false
+
+- name: Ядро до начала работ
+  ansible.builtin.command: uname -r
+  register: kernel_before
+  changed_when: false
+
+- name: Held-пакеты
+  ansible.builtin.command: apt-mark showhold
+  register: holds
+  changed_when: false
+
+- name: Модули ядра (до)
+  ansible.builtin.command: ls -la /lib/modules/
+  register: modules_before
+  changed_when: false
+
+- name: Список каталогов ядер (до)
+  ansible.builtin.command: ls -1 /lib/modules/
+  register: kernels_before
+  changed_when: false
+
+- name: Системная информация (до)
+  ansible.builtin.shell: |
+    echo "### uname -a"
+    uname -a
+    echo
+    echo "### /etc/os-release"
+    grep -E '^(PRETTY_NAME|VERSION_ID)=' /etc/os-release
+    echo
+    echo "### uptime"
+    uptime
+    echo
+    echo "### free -h"
+    free -h
+    echo
+    echo "### df -i"
+    df -i
+    echo
+    echo "### systemctl --failed"
+    systemctl --failed --no-legend || true
+    echo
+    echo "### timedatectl"
+    timedatectl || true
+    echo
+    echo "### kubelet / containerd"
+    kubelet --version
+    containerd --version || true
+  register: system_before
+  changed_when: false
+
+- name: Пакеты ядер (до)
+  ansible.builtin.shell: dpkg -l | awk '/^ii  linux-image/ {print $2, $3}'
+  register: kernel_pkgs_before
+  changed_when: false
+
+- name: Нода в кластере
+  ansible.builtin.command: kubectl get node {{ k8s_node_name }} -o wide
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: node_before
+  changed_when: false
+
+- name: Остальные ноды должны быть Ready
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl get nodes --no-headers \
+      | awk -v me="{{ k8s_node_name }}" '$1 != me && $2 !~ /^Ready/ {print; bad=1} END {exit (bad ? 1 : 0)}'
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: cluster_health
+  changed_when: false
+
+- name: PDB (могут заблокировать drain)
+  ansible.builtin.command: kubectl get pdb -A
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: pdb
+  changed_when: false
+
+- name: Диск до начала работ
+  ansible.builtin.command: df -h
+  register: df_before
+  changed_when: false
+
+- name: Свободное место на /
+  ansible.builtin.shell: df -Pk / | awk 'NR==2{print $4}'
+  register: avail_kb
+  changed_when: false
+
+- name: Нужно не меньше 5 GiB
+  ansible.builtin.assert:
+    that:
+      - avail_kb.stdout | int > 5 * 1024 * 1024
+    fail_msg: "{{ inventory_hostname }}: мало места ({{ avail_kb.stdout | trim }} KiB)"
+    quiet: true
+
+- name: Исходное состояние
+  ansible.builtin.debug:
+    msg:
+      - "node: {{ k8s_node_name }} (kernel {{ kernel_before.stdout | trim }})"
+      - "{{ node_before.stdout_lines | default([]) }}"
+      - "PDB:"
+      - "{{ pdb.stdout_lines | default([]) }}"
+      - "{{ df_before.stdout_lines | default([]) }}"

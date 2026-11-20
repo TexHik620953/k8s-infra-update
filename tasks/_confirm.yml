@@ -1,0 +1,25 @@
+---
+# Общий блок подтверждения.
+# Ожидает переменные:
+#   prev_lines — вывод предыдущего шага (строка или список строк)
+#   step_name  — текст следующего действия
+#   target     — на кого действуем (по умолчанию inventory_hostname)
+
+- name: "Предыдущий шаг — вывод"
+  ansible.builtin.debug:
+    msg: "{{ prev_lines | default(['<вывода нет>']) }}"
+
+- name: "Подтверждение: {{ step_name }}"
+  ansible.builtin.pause:
+    prompt: >-
+      Выполнить «{{ step_name }}» на {{ target | default(inventory_hostname) }}?
+      Введите yes для продолжения (любой другой ввод — остановка)
+    echo: true
+  register: _confirm
+
+- name: "Проверка подтверждения"
+  ansible.builtin.assert:
+    that:
+      - _confirm.user_input | default('') | trim | lower == 'yes'
+    fail_msg: "Остановлено пользователем на шаге: {{ step_name }}"
+    quiet: true

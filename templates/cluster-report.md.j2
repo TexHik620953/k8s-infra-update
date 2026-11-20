@@ -1,0 +1,66 @@
+# {{ cluster_snapshot_title }}
+
+- **Дата:** {{ now(fmt='%Y-%m-%d %H:%M') }}
+{% if cluster_snapshot_processed is defined %}
+- **Обработано нод:** {{ cluster_snapshot_processed }} / {{ groups['k8s_cluster'] | length }}
+{% endif %}
+
+## Ноды
+
+```
+{{ (cluster_nodes.stdout_lines | default([])) | join('\n') or '— нет данных —' }}
+```
+
+## Поды
+
+```
+{{ (cluster_pods.stdout_lines | default([])) | join('\n') or '— нет данных —' }}
+```
+
+## Поды не в Running/Completed
+
+```
+{{ (cluster_not_running.stdout_lines | default([])) | join('\n') or '— все Running/Completed —' }}
+```
+
+## Поды по нодам
+
+| Нода | Подов |
+|---|---|
+{{ (cluster_pods_per_node.stdout_lines | default([])) | join('\n') or '| — | — |' }}
+
+## PDB
+
+```
+{{ (cluster_pdb.stdout_lines | default([])) | join('\n') or '— нет PDB —' }}
+```
+
+## API /readyz
+
+```
+{{ cluster_readyz.stdout | default('—') | trim or '—' }}
+```
+
+## PVC
+
+```
+{{ (cluster_pvc.stdout_lines | default([])) | join('\n') or '— нет PVC —' }}
+```
+
+## DaemonSets
+
+```
+{{ (cluster_ds.stdout_lines | default([])) | join('\n') or '— нет DaemonSet —' }}
+```
+
+## Top nodes
+
+```
+{{ (cluster_top.stdout_lines | default([])) | join('\n') or '— metrics-server недоступен —' }}
+```
+
+## Последние события
+
+```
+{{ (cluster_events.stdout_lines | default([])) | join('\n') or '— нет событий —' }}
+```

@@ -1,0 +1,63 @@
+---
+# Обновление пакетов ОС. kubelet/kubeadm/kubectl/kubernetes-cni остаются held,
+# поэтому версия Kubernetes не меняется.
+
+- name: apt-get update
+  ansible.builtin.command: apt-get update
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: apt_update
+  changed_when: false
+
+- name: Held-пакеты
+  ansible.builtin.command: apt-mark showhold
+  register: holds
+  changed_when: false
+
+- name: Обязательные hold-пакеты
+  ansible.builtin.assert:
+    that:
+      - item in holds.stdout_lines
+    fail_msg: >-
+      {{ inventory_hostname }}: пакет {{ item }} не на hold
+      (held: {{ holds.stdout_lines | join(', ') }}).
+      Выполни: apt-mark hold {{ k8s_hold_packages | join(' ') }}
+    quiet: true
+  loop: "{{ k8s_hold_packages }}"
+
+- name: Симуляция dist-upgrade (что именно изменится)
+  ansible.builtin.command: apt-get -s dist-upgrade
+  register: upgrade_sim
+  changed_when: false
+
+- name: dist-upgrade не должен менять held-пакеты
+  ansible.builtin.assert:
+    that:
+      - ("Inst " ~ item) not in upgrade_sim.stdout
+      - ("Remv " ~ item) not in upgrade_sim.stdout
+    fail_msg: "dist-upgrade собирается изменить held-пакет {{ item }}"
+    quiet: true
+  loop: "{{ k8s_hold_packages }}"
+
+- import_tasks: _confirm.yml
+  vars:
+    prev_lines:
+      - "held: {{ holds.stdout_lines | join(', ') }}"
+      - "{{ upgrade_sim.stdout_lines | select('match', '^(Inst|Remv)') | list }}"
+    step_name: "apt-get dist-upgrade"
+
+- name: dist-upgrade
+  ansible.builtin.apt:
+    upgrade: dist
+    update_cache: false
+    autoremove: false
+    dpkg_options: "force-confdef,force-confold"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    NEEDRESTART_MODE: a
+    APT_LISTCHANGES_FRONTEND: none
+  register: upgrade
+
+- name: Показать, что обновилось
+  ansible.builtin.debug:
+    msg: "{{ upgrade.stdout_lines | default([]) }}"

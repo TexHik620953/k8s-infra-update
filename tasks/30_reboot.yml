@@ -1,0 +1,25 @@
+---
+# Перезагрузка и ожидание, пока нода вернётся и kubelet поднимется.
+
+- import_tasks: _confirm.yml
+  vars:
+    prev_lines: "{{ upgrade.stdout_lines | default([]) }}"
+    step_name: "reboot"
+
+- name: Reboot и ожидание возврата
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+    connect_timeout: 20
+    post_reboot_delay: 15
+
+- name: Ждём kubelet
+  ansible.builtin.command: systemctl is-active kubelet
+  register: kubelet_state
+  until: kubelet_state.stdout | trim == "active"
+  retries: 60
+  delay: 5
+  changed_when: false
+
+- name: Состояние kubelet
+  ansible.builtin.debug:
+    msg: "kubelet: {{ kubelet_state.stdout | trim }}"

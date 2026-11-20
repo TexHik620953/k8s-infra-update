@@ -1,0 +1,61 @@
+---
+# Возврат ноды в работу. Делается последним, после всех проверок и очистки.
+
+- name: Диск после
+  ansible.builtin.command: df -h
+  register: df_after
+  changed_when: false
+
+- name: Свободное место после
+  ansible.builtin.shell: df -Pk / | awk 'NR==2{print $4}'
+  register: avail_kb_after
+  changed_when: false
+
+- name: Что ещё не Running
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl get pods -A --no-headers | awk '$4 !~ /^(Running|Completed)$/'
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: not_running
+  changed_when: false
+
+- import_tasks: _confirm.yml
+  vars:
+    prev_lines:
+      - "{{ df_after.stdout_lines }}"
+      - "Не Running:"
+      - "{{ not_running.stdout_lines | default([]) }}"
+    step_name: "kubectl uncordon {{ k8s_node_name }}"
+
+- name: Uncordon
+  ansible.builtin.command: kubectl uncordon {{ k8s_node_name }}
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: uncordon
+  changed_when: true
+
+- name: Итоговый статус нод
+  ansible.builtin.command: kubectl get nodes -o wide
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: nodes_final
+  changed_when: false
+
+- name: Показать итог
+  ansible.builtin.debug:
+    msg:
+      - "{{ uncordon.stdout_lines | default([]) }}"
+      - "{{ nodes_final.stdout_lines | default([]) }}"
+
+- name: Вернуть фоновые обновления
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+  failed_when: false
+  changed_when: false

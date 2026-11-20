@@ -1,0 +1,112 @@
+---
+# Снимок состояния кластера целиком (не по ноде).
+# Ожидает переменные:
+#   cluster_snapshot_dest      — путь к markdown-файлу
+#   cluster_snapshot_title     — заголовок снимка
+#   cluster_snapshot_processed — необязательно: сколько нод уже обработано
+
+- name: Каталог для снимка
+  ansible.builtin.file:
+    path: "{{ cluster_snapshot_dest | dirname }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+
+- name: Ноды
+  ansible.builtin.command: kubectl get nodes -o wide
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: cluster_nodes
+  changed_when: false
+
+- name: Поды
+  ansible.builtin.command: kubectl get pods -A -o wide
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: cluster_pods
+  changed_when: false
+
+- name: Поды не в Running/Completed
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl get pods -A --no-headers | awk '$4 !~ /^(Running|Completed)$/'
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: cluster_not_running
+  changed_when: false
+
+- name: Поды по нодам
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl get pods -A -o wide --no-headers \
+      | awk '{print $8}' | sort | uniq -c \
+      | awk '{printf "| %s | %s |\n", $2, $1}'
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: cluster_pods_per_node
+  changed_when: false
+
+- name: PDB
+  ansible.builtin.command: kubectl get pdb -A
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: cluster_pdb
+  changed_when: false
+  failed_when: false
+
+- name: API /readyz
+  ansible.builtin.command: kubectl get --raw=/readyz
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: cluster_readyz
+  changed_when: false
+  failed_when: false
+
+- name: PVC
+  ansible.builtin.command: kubectl get pvc -A
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: cluster_pvc
+  changed_when: false
+  failed_when: false
+
+- name: DaemonSets
+  ansible.builtin.command: kubectl get ds -A
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: cluster_ds
+  changed_when: false
+  failed_when: false
+
+- name: Top nodes
+  ansible.builtin.command: kubectl top nodes
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: cluster_top
+  changed_when: false
+  failed_when: false
+
+- name: Последние события
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl get events -A --sort-by=.lastTimestamp | tail -40
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ kubectl_host }}"
+  become: "{{ kubectl_become }}"
+  register: cluster_events
+  changed_when: false
+  failed_when: false
+
+- name: Записать снимок
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/templates/cluster-report.md.j2"
+    dest: "{{ cluster_snapshot_dest }}"
+    mode: "0644"
+  delegate_to: localhost
+  become: false

@@ -1,0 +1,111 @@
+---
+# Отчёт по ноде. Запускается в always, поэтому пишется даже при падении
+# или отказе на подтверждении. Данные берутся из уже собранных регистров,
+# отсутствующие подставляются как «—».
+
+- name: Статус ноды
+  ansible.builtin.set_fact:
+    node_status: "{{ ('FAILED: ' ~ report_failed_task) if (report_failed_task is defined) else 'OK' }}"
+
+- name: Строка для сводки
+  ansible.builtin.set_fact:
+    summary_row: >-
+      | {{ inventory_hostname }}
+      | {{ kernel_before.stdout | default('—') | trim }}
+      | {{ kernel_now.stdout | default('—') | trim }}
+      | {% if avail_kb_after is defined %}{{ ((avail_kb_after.stdout | int) / 1048576) | round(1) }} GiB{% else %}—{% endif %}
+      | {{ node_status }} |
+
+- name: Каталоги отчётов
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ report_dir }}"
+    - "{{ report_dir }}/.summary"
+  delegate_to: localhost
+  become: false
+
+- name: Отчёт по ноде
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/templates/node-report.md.j2"
+    dest: "{{ report_dir }}/{{ inventory_hostname }}.md"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+
+- name: Строка сводки на диск
+  ansible.builtin.copy:
+    content: "{{ summary_row }}\n"
+    dest: "{{ report_dir }}/.summary/{{ inventory_hostname }}.tsv"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+
+- name: Пересобрать summary.md
+  ansible.builtin.shell: |
+    set -e
+    cd "{{ report_dir }}"
+    {
+      echo "# Сводка за $(basename "$PWD")"
+      echo
+      echo "| Нода | Ядро до | Ядро после | Свободно на / | Статус |"
+      echo "|---|---|---|---|---|"
+      sort -t'|' -k2 .summary/*.tsv
+      echo
+      echo "## Кластер"
+      echo
+      echo "[cluster.md](cluster.md) — состояние кластера до и после."
+    } > summary.md
+  args:
+    executable: /bin/bash
+  delegate_to: localhost
+  become: false
+  changed_when: true
+
+- name: Сколько нод уже обработано
+  ansible.builtin.shell: ls -1 "{{ report_dir }}"/.summary/*.tsv 2>/dev/null | wc -l
+  args:
+    executable: /bin/bash
+  delegate_to: localhost
+  become: false
+  register: processed_count
+  changed_when: false
+
+- name: Снимок кластера «после»
+  import_tasks: 80_cluster_snapshot.yml
+  vars:
+    cluster_snapshot_dest: "{{ report_dir }}/cluster-after.md"
+    cluster_snapshot_title: "Кластер после обновления"
+    cluster_snapshot_processed: "{{ processed_count.stdout | trim }}"
+  ignore_errors: true
+
+- name: Собрать cluster.md
+  ansible.builtin.shell: |
+    set -e
+    cd "{{ report_dir }}"
+    {
+      echo "# Кластер"
+      echo
+      echo "## До"
+      echo
+      if [ -f cluster-before.md ]; then
+        tail -n +2 cluster-before.md | sed '/./,$!d'
+      else
+        echo "_Снимок «до» не создавался._"
+      fi
+      echo
+      echo "## После"
+      echo
+      if [ -f cluster-after.md ]; then
+        tail -n +2 cluster-after.md | sed '/./,$!d'
+      else
+        echo "_Снимок «после» не создавался._"
+      fi
+    } > cluster.md
+  args:
+    executable: /bin/bash
+  delegate_to: localhost
+  become: false
+  changed_when: true
