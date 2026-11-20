@@ -16,30 +16,6 @@
     cluster_snapshot_title: "Кластер до обновления"
   when: not (cluster_before_file.stat.exists and cluster_before_file.stat.size | int > 0)
 
-- name: Дождаться, пока apt/dpkg освободят lock
-  ansible.builtin.shell: |
-    for i in $(seq 1 120); do
-      if ! pgrep -x apt-get >/dev/null && ! pgrep -x apt >/dev/null \
-         && ! pgrep -x dpkg >/dev/null && ! pgrep -x unattended-upgr >/dev/null; then
-        exit 0
-      fi
-      sleep 5
-    done
-    echo "apt/dpkg всё ещё занят"
-    exit 1
-  changed_when: false
-
-- name: Остановить фоновые обновления на время работ
-  ansible.builtin.systemd:
-    name: "{{ item }}"
-    state: stopped
-  loop:
-    - apt-daily.timer
-    - apt-daily-upgrade.timer
-    - unattended-upgrades.service
-  failed_when: false
-  changed_when: false
-
 - name: Ядро до начала работ
   ansible.builtin.command: uname -r
   register: kernel_before

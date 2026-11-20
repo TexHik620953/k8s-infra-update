@@ -6,9 +6,8 @@
 # Порядок:
 #   1. проверка кластера с локальной машины
 #   2. аудит всех нод (read-only)
-#   3. etcd snapshot
-#   4. workers, строго по одной ноде
-#   5. control plane, строго по одной ноде
+#   3. workers, строго по одной ноде
+#   4. control plane, строго по одной ноде
 #
 # На каждом шаге: печатается вывод предыдущей команды, затем pause
 # с требованием ввести yes. Любой другой ввод останавливает прогон.
@@ -33,26 +32,11 @@
       register: nodes_ready
       changed_when: false
 
-    - name: etcd healthy
-      ansible.builtin.shell: |
-        set -o pipefail
-        kubectl -n kube-system exec etcd-{{ groups['k8s_control_plane'][0] }} -- \
-          etcdctl --endpoints=https://127.0.0.1:2379 \
-          --cacert=/etc/kubernetes/pki/etcd/ca.crt \
-          --cert=/etc/kubernetes/pki/etcd/server.crt \
-          --key=/etc/kubernetes/pki/etcd/server.key \
-          endpoint health --cluster
-      args:
-        executable: /bin/bash
-      register: etcd_ok
-      changed_when: false
-
     - name: Исходное состояние
       ansible.builtin.debug:
         msg:
           - "{{ kubectl_ver.stdout_lines | default([]) }}"
           - "{{ nodes_ready.stdout_lines | default([]) }}"
-          - "{{ etcd_ok.stdout_lines | default([]) }}"
 
 - name: "2. Аудит всех нод (read-only)"
   hosts: k8s_cluster
@@ -105,17 +89,7 @@
           - "held: {{ holds.stdout_lines | default([]) }}"
           - "avail: {{ avail_kb.stdout | trim }} KiB"
 
-- name: "3. etcd snapshot"
-  hosts: k8s_control_plane[0]
-  gather_facts: false
-  tags: [etcd]
-  vars:
-    etcd_node: "{{ inventory_hostname }}"
-    snap_name: "etcd-snap-{{ lookup('pipe', 'date +%F-%H%M') }}.db"
-  tasks:
-    - import_tasks: tasks/90_etcd_backup.yml
-
-- name: "4. Workers — по одной ноде"
+- name: "3. Workers — по одной ноде"
   hosts: k8s_workers
   order: sorted
   serial: 1
@@ -143,7 +117,7 @@
             msg: "{{ inventory_hostname }}: остановлено на шаге «{{ report_failed_task }}»"
           when: report_failed_task is defined
 
-- name: "5. Control plane — по одной ноде"
+- name: "4. Control plane — по одной ноде"
   hosts: k8s_control_plane
   order: sorted
   serial: 1

@@ -50,12 +50,3 @@
       - "{{ uncordon.stdout_lines | default([]) }}"
       - "{{ nodes_final.stdout_lines | default([]) }}"
 
-- name: Вернуть фоновые обновления
-  ansible.builtin.systemd:
-    name: "{{ item }}"
-    state: started
-  loop:
-    - apt-daily.timer
-    - apt-daily-upgrade.timer
-  failed_when: false
-  changed_when: false

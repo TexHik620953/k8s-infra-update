@@ -11,11 +11,10 @@
 
 | # | Плей | Что происходит |
 |---|------|----------------|
-| 1 | `localhost` | `kubectl version`, все ли ноды `Ready`, `etcd endpoint health --cluster` |
+| 1 | `localhost` | `kubectl version`, все ли ноды `Ready` |
 | 2 | все 8 нод | read-only аудит: версии, `apt-mark showhold`, свободное место |
-| 3 | первая CP | `etcdctl snapshot save`, снапшот забирается в `etcd-backup/` |
-| 4 | workers, `serial: 1` | preflight → drain → dist-upgrade → reboot → verify → autoremove → uncordon |
-| 5 | control plane, `serial: 1` | то же самое, плюс проверки etcd и `/readyz` после reboot |
+| 3 | workers, `serial: 1` | preflight → drain → dist-upgrade → reboot → verify → autoremove → uncordon |
+| 4 | control plane, `serial: 1` | то же самое, плюс проверка `/readyz` после reboot |
 
 На каждом опасном шаге:
 
@@ -98,9 +97,6 @@ ansible-playbook site.yml --list-hosts
 # 0) проверки кластера и аудит нод
 ansible-playbook site.yml --tags preflight
 
-# 0.1) etcd snapshot — один раз, до всех работ
-ansible-playbook site.yml --tags etcd
-
 # 1) канарейка — один worker
 ansible-playbook site.yml --tags nodes --limit worker1
 
@@ -122,22 +118,20 @@ ansible-playbook site.yml --tags nodes --limit k8s_control_plane
 ## Как это устроено
 
 - `serial: 1` — одновременно обрабатывается ровно одна нода.
-- Теги: `preflight` (проверки), `etcd` (снапшот), `nodes` (обновление нод).
-  Благодаря тегам `--limit worker1` не отменяет etcd-снапшот — он делается
-  отдельным запуском `--tags etcd`.
+- Теги: `preflight` (проверки), `nodes` (обновление нод).
 - `max_fail_percentage: 0` + `any_errors_fatal: true` — любая ошибка
   останавливает весь прогон, остальные ноды не трогаются.
 - `tasks/_confirm.yml` — общий блок «вывод → пауза → проверка `yes`».
 - Все `command`/`shell` регистрируются в переменные и печатаются через
   `debug`, потому что Ansible по умолчанию не показывает их stdout.
-- `tasks/00_preflight.yml` ждёт освобождения `apt/dpkg` lock и останавливает
-  `apt-daily`/`unattended-upgrades` на время работ.
+- `tasks/00_preflight.yml` не ждёт `apt/dpkg` lock и не трогает таймеры
+  автообновлений: если lock занят, apt-задача упадёт с `Could not get lock`.
 - `tasks/20_os.yml` перед обновлением показывает симуляцию `apt-get -s dist-upgrade`
   (только строки `Inst`/`Remv`).
 - `tasks/30_reboot.yml` использует модуль `reboot` (ждёт возврата по SSH),
   затем ждёт `systemctl is-active kubelet`.
 - `tasks/40_verify.yml` проверяет `/lib/modules/$(uname -r)`, `Node Ready`,
-  а для CP — `etcd endpoint health` и `kubectl get --raw=/readyz`.
+  а для CP — `kubectl get --raw=/readyz`.
 - `tasks/50_cleanup.yml` делает симуляцию `autoremove`, запрещает удаление
   `linux-image-*` / `linux-modules-*` / `linux-headers-*` текущего ядра
   и только после подтверждения запускает очистку.
@@ -236,25 +230,6 @@ kubectl uncordon worker3
 7. **`kubernetes-cni` тоже на hold.** При будущем апгрейде Kubernetes его
    нужно будет unhold вместе с `kubeadm`/`kubelet`/`kubectl`.
 
-## etcd restore (на всякий случай)
-
-Автоматического restore нет — это осознанно. Если совсем плохо:
-
-```bash
-# 1) скопировать снапшот с ноутбука на CP (плей удаляет его с ноды)
-scp etcd-backup/etcd-snap-YYYY-MM-DD-HHMM.db cp1:/var/lib/etcd/
-
-# 2) на cp1 восстановить в отдельный data-dir
-kubectl -n kube-system exec etcd-cp1 -- \
-  etcdctl snapshot restore /var/lib/etcd/etcd-snap-YYYY-MM-DD-HHMM.db \
-  --data-dir=/var/lib/etcd-restore
-```
-
-Дальше нужно переключить `--data-dir` в манифесте
-`/etc/kubernetes/manifests/etcd.yaml` на `/var/lib/etcd-restore` и
-перезапустить kubelet. Делай это только по официальной инструкции:
-<https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/#restoring-an-etcd-cluster>
-
 ## Файлы
 
 ```
@@ -266,7 +241,6 @@ k8s-update/
 ├── templates/
 │   ├── cluster-report.md.j2
 │   └── node-report.md.j2
-├── etcd-backup/            # создаётся автоматически
 ├── reports/                # создаётся автоматически
 └── tasks/
     ├── _confirm.yml
@@ -278,6 +252,5 @@ k8s-update/
     ├── 50_cleanup.yml
     ├── 60_uncordon.yml
     ├── 70_report.yml
-    ├── 80_cluster_snapshot.yml
-    └── 90_etcd_backup.yml
+    └── 80_cluster_snapshot.yml
 ```
